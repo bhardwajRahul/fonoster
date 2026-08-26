@@ -30,71 +30,63 @@ chai.use(chaiAsPromised);
 chai.use(sinonChai);
 const sandbox = createSandbox();
 
-describe("@identity[apikeys/createApiKey]", function () {
+describe("@identity[apikeys/listApiKeys]", function () {
   afterEach(function () {
     return sandbox.restore();
   });
 
-  it("should create a new ApiKey", async function () {
+  it("should return timestamps as epoch seconds", async function () {
     // Arrange
     const metadata = new grpc.Metadata();
     metadata.set("token", TEST_TOKEN);
 
-    const expiresAtSeconds = Math.floor(Date.now() / 1000) + 3600;
     const call = {
       metadata,
-      request: {
-        workspaceRef: "123",
-        role: Role.WORKSPACE_ADMIN,
-        expiresAt: expiresAtSeconds
-      }
+      request: { pageSize: 10, pageToken: "" }
     };
 
-    const res = {
-      ref: "123",
-      accessKeyId: "accessKeyId",
-      accessKeySecret: "accessKeySecret"
-    };
+    const createdAt = new Date("2026-01-01T00:00:00.000Z");
+    const updatedAt = new Date("2026-01-02T00:00:00.000Z");
+    const expiresAt = new Date("2026-06-01T00:00:00.000Z");
 
-    const createStub = sandbox.stub().resolves(res);
     const prisma = {
       workspace: {
         findUnique: sandbox.stub().resolves({ ref: "123" })
       },
       apiKey: {
-        create: createStub
+        findMany: sandbox.stub().resolves([
+          {
+            ref: "456",
+            accessKeyId: "accessKeyId",
+            role: Role.WORKSPACE_ADMIN,
+            createdAt,
+            updatedAt,
+            expiresAt
+          }
+        ])
       }
     } as unknown as Prisma;
 
-    const { createCreateApiKey } = await import("../../src/apikeys/createCreateApiKey");
+    const { createListApiKeys } = await import("../../src/apikeys/createListApiKeys");
 
     // Act
-    await createCreateApiKey(prisma)(call, (_, response) => {
+    await createListApiKeys(prisma)(call, (_, response) => {
       // Assert
-      expect(response).has.property("ref").to.be.equal("123");
-      expect(response).has.property("accessKeyId").to.be.equal("accessKeyId");
-      expect(response)
-        .has.property("accessKeySecret")
-        .to.be.equal("accessKeySecret");
+      const item = response.items[0];
+      expect(item.createdAt).to.be.equal(Math.floor(createdAt.getTime() / 1000));
+      expect(item.updatedAt).to.be.equal(Math.floor(updatedAt.getTime() / 1000));
+      expect(item.expiresAt).to.be.equal(Math.floor(expiresAt.getTime() / 1000));
     });
-
-    // expiresAt is wire-format epoch seconds; it must be widened to
-    // milliseconds before being stored as a Date.
-    const storedExpiresAt = createStub.firstCall.args[0].data.expiresAt as Date;
-    expect(storedExpiresAt.getTime()).to.be.equal(expiresAtSeconds * 1000);
   });
 
-  it("should throw an error if the ApiKey already exists", async function () {
+  it("should omit expiresAt when the key never expires", async function () {
     // Arrange
     const metadata = new grpc.Metadata();
     metadata.set("token", TEST_TOKEN);
+
     const call = {
       metadata,
-      request: {
-        workspaceRef: "123",
-        role: Role.WORKSPACE_ADMIN,
-        expiresAt: Math.floor(Date.now() / 1000) + 3600
-      }
+      request: { pageSize: 10, pageToken: "" }
     };
 
     const prisma = {
@@ -102,19 +94,25 @@ describe("@identity[apikeys/createApiKey]", function () {
         findUnique: sandbox.stub().resolves({ ref: "123" })
       },
       apiKey: {
-        create: sandbox.stub().throws({ code: "P2002" })
+        findMany: sandbox.stub().resolves([
+          {
+            ref: "456",
+            accessKeyId: "accessKeyId",
+            role: Role.WORKSPACE_ADMIN,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            expiresAt: null
+          }
+        ])
       }
     } as unknown as Prisma;
 
-    const { createCreateApiKey } = await import("../../src/apikeys/createCreateApiKey");
+    const { createListApiKeys } = await import("../../src/apikeys/createListApiKeys");
 
     // Act
-    await createCreateApiKey(prisma)(call, (error) => {
+    await createListApiKeys(prisma)(call, (_, response) => {
       // Assert
-      expect(error).to.deep.equal({
-        code: grpc.status.ALREADY_EXISTS,
-        message: "The resource already exists"
-      });
+      expect(response.items[0].expiresAt).to.be.undefined;
     });
   });
 });
