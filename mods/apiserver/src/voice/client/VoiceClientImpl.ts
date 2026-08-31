@@ -93,9 +93,6 @@ class VoiceClientImpl implements VoiceClient {
       return;
     }
 
-    // Set up GRPC client
-    await this.grpcHandler.setupGrpcClient();
-
     // Set up audio socket and external media
     const externalMediaPort = await pickPort({ type: "tcp" });
     logger.verbose("picked external media port", { port: externalMediaPort });
@@ -118,6 +115,14 @@ class VoiceClientImpl implements VoiceClient {
       audioStream: this.audioSocketHandler.getAudioStream(),
       mediaSessionRef: this.config.mediaSessionRef
     });
+
+    // Set up the GRPC client LAST. Opening the session immediately writes the request
+    // that starts the voice application, so nothing it may depend on can still be
+    // pending when that happens — the Say handler needs the speech handler built just
+    // above, and the caller attaches the verb listeners before calling connect (see
+    // VoiceDispatcher.handleStasisStart). Doing this first let a fast application's
+    // opening verbs arrive before the client could serve them.
+    await this.grpcHandler.setupGrpcClient();
 
     logger.verbose("voice client setup completed");
   }
